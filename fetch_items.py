@@ -1,46 +1,72 @@
 import requests
 import time
-import json
 import os
-from tqdm import tqdm
+import tqdm
 from utils import get_token
-from db import update_item_names
 
 REGION = os.getenv("BLIZZ_REGION", "eu").strip()
 LOCALE = os.getenv("LOCALE", "fr_FR").strip()
-CACHE_FILE = "item_cache.json"
+NAMESPACE = f"static-{REGION}"
 
-def load_cache():
-    if os.path.exists(CACHE_FILE):
-        with open(CACHE_FILE, 'r') as f:
-            return json.load(f)
-    return {}
-
-def save_cache(cache):
-    with open(CACHE_FILE, 'w') as f:
-        json.dump(cache, f)
-
-def fetch_item_names(item_ids):
+def get_all_item_ids():
     token = get_token()
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept-Charset": "utf-8"
+    }
+
+    url = f"https://{REGION}.api.blizzard.com/data/wow/item/index"
+    params = {"namespace": NAMESPACE, "locale": LOCALE}
+    
+    response = requests.get(url, headers=headers, params=params, timeout=30)
+    response.raise_for_status()
+
+    items_data = response.json()
+    item_refs = items_data.get("items", [])
+
+    item_ids = [item["id"] for item in item_refs if "id" in item]
+
+    return item_ids
+
+
+def fetch_item_names(item_ids, token, region="eu", locale="fr_FR", delay=0.05):
     headers = {"Authorization": f"Bearer {token}"}
-    item_names = load_cache()
+    item_names = []
 
     for item_id in tqdm(item_ids, desc="Objets"):
-        if str(item_id) in item_names:
-            continue  # Skip if item is already in cache
+        if item_id is None:
+            continue
 
-        url = f"https://{REGION}.api.blizzard.com/data/wow/item/{item_id}?namespace=static-{REGION}&locale={LOCALE}"
-        resp = requests.get(url, headers=headers, timeout=15)
+        item_url = f"https://{region}.api.blizzard.com/data/wow/item/{item_id}?namespace=static-{region}&locale={locale}"
 
-        if resp.status_code == 200:
-            data = resp.json()
-            item_names[str(item_id)] = data.get("name", f"Item {item_id}")
-        else:
-            item_names[str(item_id)] = f"Item {item_id}"
+        try:
+            response = requests.get(item_url, headers=headers, timeout=10)
+            if response.status_code == 404:
+                print(f"Objet {item_id} introuvable.")
+                continue
+            response.raise_for_status()
+            data = response.json()
 
-        time.sleep(0.05)
+            name_data = data.get("name")
+            if isinstance(name_data, dict):
+                name = name_data.get(locale, "")
+            else:
+                name = name_data or ""
 
-    save_cache(item_names)
-    update_item_names(item_names)
-    print(f"{len(item_names)} objets mis à jour.")
+            if name:
+                item_names.append((item_id, name))
 
+        except requests.RequestException as e:
+            print(f"Erreur pour l'objet {item_id} : {e}")
+            continue
+
+        time.sleep(delay)
+
+    return item_names
+
+if __name__ == "__main__":
+    try:
+        ids = get_all_item_ids()
+        print(f"Nombre total d'IDs d'objets récupérés : {len(ids)}")
+    except Exception as e:
+        print(f"Une erreur s'est produite : {e}")

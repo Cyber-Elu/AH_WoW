@@ -7,9 +7,8 @@ DB_PATH = "auctions.db"
 
 st.set_page_config(page_title="Données des enchères WoW", layout="wide")
 
-# --- Fonctions avec cache (et _conn pour éviter les erreurs Streamlit) ---
-
-@st.cache_data(ttl=600)  # cache 10 minutes
+# Fonctions avec cache
+@st.cache_data(ttl=600)  # Cache pour 10 minutes
 def get_total_auctions(_conn):
     query = "SELECT COUNT(*) FROM auctions"
     return pd.read_sql_query(query, _conn).iloc[0, 0]
@@ -33,48 +32,50 @@ def get_auction_data(_conn, item_id):
     """
     return pd.read_sql_query(query, _conn, params=(item_id,))
 
-# --- Interface principale ---
-with sqlite3.connect(DB_PATH) as conn:
-    page = st.sidebar.selectbox("Naviguer vers :", ["📊 Statistiques globales", "📈 Prix par objet"])
+# Interface principale
+def main():
+    with sqlite3.connect(DB_PATH) as conn:
+        page = st.sidebar.selectbox("Naviguer vers :", ["📊 Statistiques globales", "📈 Prix par objet"])
 
-    if page == "📊 Statistiques globales":
-        st.title("Nombre d’objets en vente")
-        total = get_total_auctions(conn)
-        st.metric("Nombre d’enchères", total)
+        if page == "📊 Statistiques globales":
+            st.title("Nombre d’objets en vente")
+            total = get_total_auctions(conn)
+            st.metric("Nombre d’enchères", total)
 
-    elif page == "📈 Prix par objet":
-        st.title("Évolution des prix par objet")
+        elif page == "📈 Prix par objet":
+            st.title("Évolution des prix par objet")
+            items_df = get_items(conn)
 
-        items_df = get_items(conn)
+            if items_df.empty:
+                st.warning("Aucun objet trouvé dans la base.")
+                return
 
-        if items_df.empty:
-            st.warning("Aucun objet trouvé dans la base.")
-            st.stop()
+            item_name = st.selectbox("Choisissez un objet :", items_df["item_name"])
+            filtered = items_df.loc[items_df["item_name"] == item_name, "item_id"]
 
-        item_name = st.selectbox("Choisissez un objet :", items_df["item_name"])
+            if filtered.empty:
+                st.error("Aucun ID trouvé pour l’objet sélectionné.")
+                return
 
-        filtered = items_df.loc[items_df["item_name"] == item_name, "item_id"]
-        if filtered.empty:
-            st.error("Aucun ID trouvé pour l’objet sélectionné.")
-            st.stop()
+            item_id = filtered.values[0]
+            df = get_auction_data(conn, item_id)
 
-        item_id = filtered.values[0]
-        df = get_auction_data(conn, item_id)
+            if df.empty:
+                st.warning("Aucune donnée disponible pour cet objet.")
+            else:
+                df['scraped_at'] = pd.to_datetime(df['scraped_at'])
+                fig, ax = plt.subplots(figsize=(10, 5))
+                ax.plot(df['scraped_at'], df['unit_price'], label='Prix unitaire', marker='o')
 
-        if df.empty:
-            st.warning("Aucune donnée disponible pour cet objet.")
-        else:
-            df['scraped_at'] = pd.to_datetime(df['scraped_at'])
+                if pd.notna(df['buyout']).any():
+                    ax.plot(df['scraped_at'], df['buyout'], label='Prix d\'achat immédiat', marker='x')
 
-            fig, ax = plt.subplots(figsize=(10, 5))
-            ax.plot(df['scraped_at'], df['unit_price'], label='Prix unitaire', marker='o')
+                ax.set_title(f"Évolution des prix – {item_name}")
+                ax.set_xlabel("Date")
+                ax.set_ylabel("Prix (cuivre)")
+                ax.grid(True)
+                ax.legend()
+                st.pyplot(fig)
 
-            if df['buyout'].notnull().any():
-                ax.plot(df['scraped_at'], df['buyout'], label='Prix d\'achat immédiat', marker='x')
-
-            ax.set_title(f"Évolution des prix – {item_name}")
-            ax.set_xlabel("Date")
-            ax.set_ylabel("Prix (cuivre)")
-            ax.grid(True)
-            ax.legend()
-            st.pyplot(fig, clear_figure=True)
+if __name__ == "__main__":
+    main()

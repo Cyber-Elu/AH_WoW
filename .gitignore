@@ -4,5 +4,6 @@ auctions.db
 __pycache__/
 .venv/
 logs/
-
+.env
 .vscode/extensions.json
+item_cache.json
