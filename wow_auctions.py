@@ -2,6 +2,8 @@ from pathlib import Path
 import csv, os, requests, time
 from dotenv import load_dotenv
 from tqdm import tqdm
+import pandas as pd
+import sqlite3
 
 load_dotenv()
 
@@ -74,3 +76,49 @@ with OUT_CSV.open("w", newline="", encoding="utf-8") as f:
         writer.writerow([pick(auc, f) for f in FIELDS])
 
 print(f"Fichier généré : {OUT_CSV.resolve()}")
+
+# --- Lire le fichier CSV ---
+df = pd.read_csv(OUT_CSV)
+
+# Nettoyage de base :
+# - Remplacer les NaN par 0 pour les champs numériques
+# - Supprimer les lignes sans item.id (inutilisables)
+df = df[df["item.id"].notna()].copy()
+df["item.id"] = df["item.id"].astype(int)
+
+# Conversion des types numériques
+for col in ["buyout", "unit_price", "quantity", "bid", "rand", "context", "pet_species_id"]:
+    if col in df.columns:
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
+
+# Nettoyage des noms d’objet
+df["item_name"] = df["item_name"].fillna("Inconnu")
+
+
+
+# --- Connexion à la base SQLite (fichier .db) ---
+conn = sqlite3.connect("auctions.db")
+cursor = conn.cursor()
+
+# Création de la table
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS auctions (
+    id INTEGER PRIMARY KEY,
+    item_id INTEGER,
+    item_name TEXT,
+    buyout INTEGER,
+    unit_price INTEGER,
+    quantity INTEGER,
+    time_left TEXT,
+    bid INTEGER,
+    rand INTEGER,
+    context INTEGER,
+    pet_species_id INTEGER
+)
+""")
+
+# Insertion
+df.to_sql("auctions", conn, if_exists="append", index=False)
+
+conn.commit()
+conn.close()
