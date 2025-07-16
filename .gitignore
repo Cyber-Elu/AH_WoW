@@ -1,7 +1,8 @@
 test.py
 auctions_1305_1752591060.csv
 auctions.db
-__pycache__/db.cpython-39.pyc
-__pycache__/fetch_auctions.cpython-39.pyc
-__pycache__/fetch_items.cpython-39.pyc
-__pycache__/utils.cpython-39.pyc
+__pycache__/
+.venv/
+logs/
+
+.vscode/extensions.json
