@@ -7,3 +7,6 @@ logs/
 .env
 .vscode/extensions.json
 item_cache.json
+blizzard_auth.py
+connected_realms.csv
+connected_realms.txt
