@@ -3,6 +3,8 @@ from mysql.connector import Error
 from config import Config
 
 def create_database():
+    connection = None
+    cursor = None
     try:
         # First, connect to MySQL server without specifying a database
         connection = mysql.connector.connect(
@@ -44,25 +46,25 @@ def create_database():
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     item_id INT NOT NULL,
                     quantity INT,
-                    unit_price INT,
-                    buyout_price INT,
+                    unit_price BIGINT,
+                    buyout_price BIGINT,
                     time_left VARCHAR(50),
-                    bid_price INT,
+                    bid_price BIGINT,
                     auction_duration VARCHAR(50),
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (item_id) REFERENCES items(item_id)
-                )
-            """)
+    )
+""")
             print("Table 'auctions' created or already exists")
 
     except Error as e:
         print(f"Error while connecting to MySQL: {e}")
     finally:
-        if connection.is_connected():
-            cursor.close()
+        if connection is not None and connection.is_connected():
+            if cursor is not None:
+                cursor.close()
             connection.close()
             print("MySQL connection is closed")
-
 if __name__ == "__main__":
     print("Starting database setup...")
     create_database()

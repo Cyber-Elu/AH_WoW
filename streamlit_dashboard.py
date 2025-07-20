@@ -32,5 +32,9 @@ selected_item = st.selectbox("Select an item", items)
 item_data = df[df['item_name'] == selected_item].sort_values('date')
 
 st.subheader(f"Price and Availability for {selected_item}")
-st.line_chart(item_data.set_index('date')[['avg_price']], y_label="Average Buyout Price")
-st.line_chart(item_data.set_index('date')[['total_available']], y_label="Total Available")
+
+if item_data.empty:
+    st.warning("No data available for this item.")
+else:
+    st.line_chart(item_data.set_index('date')[['avg_price']], y_label="Average Buyout Price")
+    st.line_chart(item_data.set_index('date')[['total_available']], y_label="Total Available")

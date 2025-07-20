@@ -1,18 +1,16 @@
 import requests
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from config import Config
 from db_helper import get_db_connection
 
-# Initialize Config once at the module level
+# Initialiser la configuration
 config = Config()
 
 def get_blizzard_token():
-    """Get OAuth token from Blizzard API"""
+    """Obtenir un token OAuth depuis l'API de Blizzard"""
     auth_url = f"https://{config.BLIZZ_REGION}.battle.net/oauth/token"
-    payload = {
-        'grant_type': 'client_credentials'
-    }
+    payload = {'grant_type': 'client_credentials'}
     try:
         response = requests.post(
             auth_url,
@@ -23,10 +21,10 @@ def get_blizzard_token():
         response.raise_for_status()
         return response.json()['access_token']
     except requests.exceptions.RequestException as e:
-        raise Exception(f"Failed to get token: {str(e)}")
+        raise Exception(f"❌ Erreur lors de l'obtention du token : {str(e)}")
 
 def fetch_auction_data():
-    """Fetch auction data from Blizzard API"""
+    """Récupérer les données d'enchères classiques et commodities"""
     try:
         token = get_blizzard_token()
         headers = {
@@ -34,107 +32,122 @@ def fetch_auction_data():
             'Battlenet-Namespace': f'dynamic-{config.BLIZZ_REGION}'
         }
 
-        url = f"https://{config.BLIZZ_REGION}.api.blizzard.com/data/wow/connected-realm/{config.CONNECTED_REALM_ID}/auctions"
-
         params = {
             'namespace': f'dynamic-{config.BLIZZ_REGION}',
             'locale': config.LOCALE
         }
 
-        response = requests.get(url, headers=headers, params=params, timeout=30)
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        raise Exception(f"Failed to fetch auction data: {str(e)}")
+        # 🔹 Enchères classiques (liées au royaume connecté)
+        classic_url = (
+            f"https://{config.BLIZZ_REGION}.api.blizzard.com/data/wow/connected-realm/"
+            f"{config.CONNECTED_REALM_ID}/auctions"
+        )
+        classic_response = requests.get(classic_url, headers=headers, params=params, timeout=30)
+        classic_response.raise_for_status()
+        classic_data = classic_response.json()
 
-def process_auction_data(auction_data):
-    """Process and store auction data in the database"""
+        # 🔹 Commodities (objets de consommation global)
+        commodity_url = f"https://{config.BLIZZ_REGION}.api.blizzard.com/data/wow/auctions/commodities"
+        commodity_response = requests.get(commodity_url, headers=headers, params=params, timeout=30)
+        commodity_response.raise_for_status()
+        commodity_data = commodity_response.json()
+
+        return {
+            'classic': classic_data.get('auctions', []),
+            'commodities': commodity_data.get('auctions', [])
+        }
+
+    except requests.exceptions.RequestException as e:
+        raise Exception(f"❌ Erreur lors de la récupération des données d'enchères : {str(e)}")
+
+def process_auction_data(auctions_by_type):
+    """Traite les données d'enchères classiques et commodities et les insère dans la base"""
     connection = None
     try:
         connection = get_db_connection()
         if not connection:
-            raise Exception("Failed to get database connection")
+            raise Exception("Impossible d'établir la connexion à la base de données")
 
         cursor = connection.cursor()
+        now = datetime.now(timezone.utc)
 
-        # Get current timestamp
-        current_time = datetime.utcnow()
+        total_processed = 0
+        new_items = 0
+        existing_items = 0
 
-        # Process auctions
-        auctions = auction_data.get('auctions', [])
-        if not auctions:
-            print("No auctions found in the response")
-            return False
+        for auction_type, auctions in auctions_by_type.items():
+            for auction in auctions:
+                try:
+                    item = auction.get('item', {})
+                    item_id = item.get('id')
+                    if not item_id:
+                        continue
 
-        processed_count = 0
-        for auction in auctions:
-            try:
-                item_id = auction['item']['id']
-                quantity = auction.get('quantity', 1)
-                unit_price = auction.get('unit_price', 0)
-                buyout_price = auction.get('buyout', 0)
-                time_left = auction.get('time_left', '')
-                bid_price = auction.get('bid', 0)
-                auction_duration = auction.get('duration', '')
+                    quantity = auction.get('quantity', 1)
+                    unit_price = auction.get('unit_price', 0)
+                    buyout_price = auction.get('buyout', 0)
+                    time_left = auction.get('time_left', '')
+                    bid_price = auction.get('bid', 0)
+                    duration = auction.get('duration', '')
 
-                # Check if item exists in items table
-                cursor.execute("SELECT 1 FROM items WHERE item_id = %s", (item_id,))
-                if not cursor.fetchone():
-                    # Insert placeholder for unknown items
-                    cursor.execute("""
-                        INSERT INTO items (item_id, name)
-                        VALUES (%s, %s)
-                        ON DUPLICATE KEY UPDATE name = name
-                    """, (item_id, f"Unknown Item {item_id}"))
+                    # Vérifie si l'objet est déjà connu
+                    cursor.execute("SELECT 1 FROM items WHERE item_id = %s", (item_id,))
+                    if not cursor.fetchone():
+                        cursor.execute(
+                            "INSERT INTO items (item_id, name) VALUES (%s, %s)",
+                            (item_id, f"Objet inconnu {item_id}")
+                        )
+                        new_items += 1
+                    else:
+                        existing_items += 1
 
-                # Insert auction data with timestamp
-                cursor.execute("""
-                    INSERT INTO auctions
-                    (item_id, quantity, unit_price, buyout_price,
-                     time_left, bid_price, auction_duration, created_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                """, (item_id, quantity, unit_price, buyout_price,
-                      time_left, bid_price, auction_duration, current_time))
+                    # Insère les données d'enchères
+                    cursor.execute(
+                        """
+                        INSERT INTO auctions
+                        (item_id, quantity, unit_price, buyout_price, time_left, bid_price, auction_duration, created_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (item_id, quantity, unit_price, buyout_price, time_left, bid_price, duration, now)
+                    )
 
-                processed_count += 1
+                    total_processed += 1
 
-            except Exception as e:
-                print(f"Error processing auction {auction.get('id', 'unknown')}: {str(e)}")
-                continue
+                except Exception as e:
+                    print(f"Erreur lors du traitement de l'enchère {auction.get('id', 'inconnue')} : {str(e)}")
 
         connection.commit()
-        print(f"Successfully processed {processed_count}/{len(auctions)} auctions")
-        return True
+
+        print(f"✅ {total_processed} enchères traitées.")
+        print(f"📦 {new_items} nouveaux objets ajoutés à la base de données.")
+        print(f"📦 {existing_items} objets déjà connus ignorés.")
 
     except Exception as e:
-        print(f"Error processing auction data: {str(e)}")
         if connection:
             connection.rollback()
-        return False
+        print(f"❌ Erreur lors du traitement des données : {str(e)}")
     finally:
         if connection and connection.is_connected():
             cursor.close()
             connection.close()
 
 if __name__ == "__main__":
-    print("Starting auction data collection...")
+    print("\n🚀 Démarrage de la collecte des données d'enchères...")
 
     try:
-        # Verify we have all required configuration
         required_configs = [
             'BLIZZ_CLIENT_ID', 'BLIZZ_CLIENT_SECRET',
             'BLIZZ_REGION', 'LOCALE', 'CONNECTED_REALM_ID'
         ]
+        missing = [k for k in required_configs if not getattr(config, k)]
+        if missing:
+            raise Exception(f"Configuration manquante : {', '.join(missing)}")
 
-        missing_configs = [cfg for cfg in required_configs if not getattr(config, cfg)]
-        if missing_configs:
-            raise Exception(f"Missing required configuration: {', '.join(missing_configs)}")
+        auctions_by_type = fetch_auction_data()
+        if auctions_by_type:
+            process_auction_data(auctions_by_type)
 
-        auction_data = fetch_auction_data()
-        if auction_data:
-            process_auction_data(auction_data)
-
-        print("Auction data collection completed successfully.")
+        print("\n✅ Collecte des données d'enchères terminée avec succès.")
 
     except Exception as e:
-        print(f"Error in auction data collection: {str(e)}")
+        print(f"\n❌ Erreur critique : {str(e)}")
