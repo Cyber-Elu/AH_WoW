@@ -1,40 +1,56 @@
 import streamlit as st
 import pandas as pd
-from sqlalchemy import create_engine
+import mysql.connector
+from datetime import datetime
 from dotenv import load_dotenv
 import os
 
-# Load env vars
-load_dotenv()
-HOST = os.getenv('DB_HOST')
-USER = os.getenv('DB_USER')
-PWD = os.getenv('DB_PASSWORD')
-DB = os.getenv('DB_NAME')
+load_dotenv()  # Load variables from .env
 
-# Create engine
-engine = create_engine(f'mysql+pymysql://{USER}:{PWD}@{HOST}/{DB}')
+# Connexion BDD
+def get_db_connection():
+    return mysql.connector.connect(
+        host=os.getenv("DB_HOST"),
+        user=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASSWORD"),
+        database=os.getenv("DB_NAME")
+    )
 
-@st.cache_data
-def load_data():
-    return pd.read_sql("""
-        SELECT dp.date, dp.item_id, i.name as item_name, dp.avg_price, dp.total_available
-        FROM item_daily_prices dp
-        JOIN items i ON i.item_id = dp.item_id
-        ORDER BY item_name, dp.date
-    """, engine)
+# Formatage du prix
+def format_price(copper):
+    gold = copper // 10000
+    silver = (copper % 10000) // 100
+    copper = copper % 100
+    return f"{gold} PO {silver} PA {copper} PC"
 
-st.title("WoW Auction House - Price Timeline")
+# Titre
+st.title("📈 Suivi des prix - Hôtel des ventes")
 
-df = load_data()
-items = df['item_name'].unique()
-selected_item = st.selectbox("Select an item", items)
+# Sélection de l'objet
+conn = get_db_connection()
+item_df = pd.read_sql("SELECT DISTINCT item_id, name FROM items ORDER BY name", conn)
+selected_name = st.selectbox("Choisissez un objet :", item_df['name'])
 
-item_data = df[df['item_name'] == selected_item].sort_values('date')
+# Récupérer l’item_id
+selected_id = item_df[item_df['name'] == selected_name]['item_id'].values[0]
 
-st.subheader(f"Price and Availability for {selected_item}")
+# Récupération des enchères associées
+query = f"""
+SELECT created_at, unit_price, buyout_price
+FROM auctions
+WHERE item_id = {selected_id}
+ORDER BY created_at ASC
+"""
+df = pd.read_sql(query, conn)
+conn.close()
 
-if item_data.empty:
-    st.warning("No data available for this item.")
+# Ajouter une colonne de prix à afficher (commodities = unit_price)
+df['price'] = df['unit_price'].where(df['unit_price'] > 0, df['buyout_price'])
+df['price_po'] = df['price'] / 10000
+
+if df.empty:
+    st.warning("Aucune donnée trouvée pour cet objet.")
 else:
-    st.line_chart(item_data.set_index('date')[['avg_price']], y_label="Average Buyout Price")
-    st.line_chart(item_data.set_index('date')[['total_available']], y_label="Total Available")
+    st.line_chart(df.set_index('created_at')['price_po'])
+    latest = df.iloc[-1]['price']
+    st.success(f"Dernier prix : **{format_price(latest)}**")
