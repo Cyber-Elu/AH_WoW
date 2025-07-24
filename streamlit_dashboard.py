@@ -59,10 +59,22 @@ daily = (
     .reset_index()
 )
 
+# Ajout d'un slider pour définir le seuil de filtrage
+threshold = st.slider("Seuil de filtrage des prix (en pourcentage de la moyenne)", 0, 100, 30)
+
+# Calcul des seuils pour filtrer les outliers
+threshold_factor = threshold / 100
+daily['min_threshold'] = daily['mean_price'] * (1 - threshold_factor)
+daily['max_threshold'] = daily['mean_price'] * (1 + threshold_factor)
+
+# Remplacement des valeurs extrêmes par NaN
+daily.loc[daily['min_price'] < daily['min_threshold'], 'min_price'] = None
+daily.loc[daily['max_price'] > daily['max_threshold'], 'max_price'] = None
+
 # On convertit en “PO” pour l’axe Y (optionnel)
 daily['mean_po'] = daily['mean_price'] / 10000
-daily['min_po']  = daily['min_price']  / 10000
-daily['max_po']  = daily['max_price']  / 10000
+daily['min_po'] = daily['min_price'] / 10000
+daily['max_po'] = daily['max_price'] / 10000
 
 # Construction du graphique Altair
 base = alt.Chart(daily).encode(
